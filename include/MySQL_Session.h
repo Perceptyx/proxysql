@@ -3,7 +3,7 @@
 #include "proxysql.h"
 #include "cpp.h"
 
-#include "../deps/json/json.hpp"
+#include <nlohmann/json.hpp>
 using json = nlohmann::json;
 
 enum proxysql_session_type {

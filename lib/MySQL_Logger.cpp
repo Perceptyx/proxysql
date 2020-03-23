@@ -10,7 +10,7 @@
 #include <dirent.h>
 #include <libgen.h>
 
-#include "../deps/json/json.hpp"
+#include <nlohmann/json.hpp>
 using json = nlohmann::json;
 
 #ifdef DEBUG

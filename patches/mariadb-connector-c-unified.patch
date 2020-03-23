@@ -1,0 +1,391 @@
+diff -ru mariadb-connector-c-3.1.4-src.orig/include/mariadb_com.h mariadb-connector-c-3.1.4-src/include/mariadb_com.h
+--- mariadb-connector-c-3.1.4-src.orig/include/mariadb_com.h	2020-03-23 10:54:23.475352539 -0300
++++ mariadb-connector-c-3.1.4-src/include/mariadb_com.h	2020-03-23 10:54:23.514352738 -0300
+@@ -207,8 +207,6 @@
+                                  CLIENT_LONG_FLAG |\
+                                  CLIENT_TRANSACTIONS |\
+                                  CLIENT_SECURE_CONNECTION |\
+-                                 CLIENT_MULTI_RESULTS | \
+-                                 CLIENT_PS_MULTI_RESULTS |\
+                                  CLIENT_PROTOCOL_41 |\
+                                  CLIENT_PLUGIN_AUTH |\
+                                  CLIENT_SESSION_TRACKING |\
+diff -ru mariadb-connector-c-3.1.4-src.orig/include/mysql.h mariadb-connector-c-3.1.4-src/include/mysql.h
+--- mariadb-connector-c-3.1.4-src.orig/include/mysql.h	2020-03-23 10:54:23.475352539 -0300
++++ mariadb-connector-c-3.1.4-src/include/mysql.h	2020-03-23 10:54:23.507352702 -0300
+@@ -492,7 +492,7 @@
+ unsigned long STDCALL mysql_thread_id(MYSQL *mysql);
+ const char * STDCALL mysql_character_set_name(MYSQL *mysql);
+ void STDCALL mysql_get_character_set_info(MYSQL *mysql, MY_CHARSET_INFO *cs);
+-int STDCALL mysql_set_character_set(MYSQL *mysql, const char *csname);
++int STDCALL mysql_set_character_set(MYSQL *mysql, const char *csname, uint charsetnr);
+ 
+ my_bool mariadb_get_infov(MYSQL *mysql, enum mariadb_value value, void *arg, ...);
+ my_bool STDCALL mariadb_get_info(MYSQL *mysql, enum mariadb_value value, void *arg);
+@@ -511,6 +511,7 @@
+ 					   const char *unix_socket,
+ 					   unsigned long clientflag);
+ void		STDCALL mysql_close(MYSQL *sock);
++void		STDCALL mysql_close_no_command(MYSQL *sock);
+ int		STDCALL mysql_select_db(MYSQL *mysql, const char *db);
+ int		STDCALL mysql_query(MYSQL *mysql, const char *q);
+ int		STDCALL mysql_send_query(MYSQL *mysql, const char *q,
+@@ -610,7 +611,7 @@
+ int STDCALL mysql_stmt_next_result_cont(int *ret, MYSQL_STMT *stmt, int status);
+ 
+ int STDCALL mysql_set_character_set_start(int *ret, MYSQL *mysql,
+-                                                   const char *csname);
++                                                   const char *csname, uint charsetnr);
+ int STDCALL mysql_set_character_set_cont(int *ret, MYSQL *mysql,
+                                                   int status);
+ int STDCALL mysql_change_user_start(my_bool *ret, MYSQL *mysql,
+diff -ru mariadb-connector-c-3.1.4-src.orig/libmariadb/ma_alloc.c mariadb-connector-c-3.1.4-src/libmariadb/ma_alloc.c
+--- mariadb-connector-c-3.1.4-src.orig/libmariadb/ma_alloc.c	2020-03-23 10:54:23.476352544 -0300
++++ mariadb-connector-c-3.1.4-src/libmariadb/ma_alloc.c	2020-03-23 10:54:23.520352768 -0300
+@@ -85,7 +85,7 @@
+   if (! next)
+   {						/* Time to alloc new block */
+     get_size= MAX(Size+ALIGN_SIZE(sizeof(MA_USED_MEM)),
+-              (mem_root->block_size & ~1) * (mem_root->block_num >> 2));
++              (mem_root->block_size & ~1) * ( (mem_root->block_num >> 2) < 4 ? 4 : (mem_root->block_num >> 2) ) );
+ 
+     if (!(next = (MA_USED_MEM*) malloc(get_size)))
+     {
+diff -ru mariadb-connector-c-3.1.4-src.orig/libmariadb/ma_charset.c mariadb-connector-c-3.1.4-src/libmariadb/ma_charset.c
+--- mariadb-connector-c-3.1.4-src.orig/libmariadb/ma_charset.c	2020-03-23 10:54:23.476352544 -0300
++++ mariadb-connector-c-3.1.4-src/libmariadb/ma_charset.c	2020-03-23 10:54:23.523352783 -0300
+@@ -720,7 +720,7 @@
+   { 182, 1, "utf32", "utf32_unicode_520_ci", "", 0, "UTF32", 4, 4, mysql_mbcharlen_utf32, check_mb_utf32},
+   { 183, 1, "utf32", "utf32_vietnamese_ci", "", 0, "UTF32", 4, 4, mysql_mbcharlen_utf32, check_mb_utf32},
+ 
+-  { 192, 1, UTF8_MB3, UTF8_MB3"_general_ci", "", 65001, "UTF-8", 1, 3, mysql_mbcharlen_utf8mb3, check_mb_utf8mb3_valid},
++  { 192, 1, UTF8_MB3, UTF8_MB3"_unicode_ci", "", 65001, "UTF-8", 1, 3, mysql_mbcharlen_utf8mb3, check_mb_utf8mb3_valid},
+   { 193, 1, UTF8_MB3, UTF8_MB3"_icelandic_ci", "", 65001, "UTF-8", 1, 3, mysql_mbcharlen_utf8mb3, check_mb_utf8mb3_valid},
+   { 194, 1, UTF8_MB3, UTF8_MB3"_latvian_ci", "", 65001, "UTF-8", 1, 3, mysql_mbcharlen_utf8mb3,  check_mb_utf8mb3_valid},
+   { 195, 1, UTF8_MB3, UTF8_MB3"_romanian_ci", "", 65001, "UTF-8", 1, 3, mysql_mbcharlen_utf8mb3, check_mb_utf8mb3_valid},
+diff -ru mariadb-connector-c-3.1.4-src.orig/libmariadb/ma_password.c mariadb-connector-c-3.1.4-src/libmariadb/ma_password.c
+--- mariadb-connector-c-3.1.4-src.orig/libmariadb/ma_password.c	2020-03-23 10:54:23.477352550 -0300
++++ mariadb-connector-c-3.1.4-src/libmariadb/ma_password.c	2020-03-23 10:54:23.504352687 -0300
+@@ -98,6 +98,35 @@
+ 	}
+ }
+ 
++unsigned char decode_char(char x) {
++   if (x >= '0' && x <= '9')
++       return (x - 0x30);
++   else if (x >= 'A' && x <= 'F')
++       return(x - 0x37);
++   else if (x >= 'a' && x <= 'f')
++       return(x - 0x57);
++   else {
++       fprintf(stderr,"%s:%d:%s(): [ERROR in libmariadbclient]: \n",  __FILE__, __LINE__, __func__);
++       return 0;
++   }
++}
++
++void unhex_pass(unsigned char *out, const char *in) {
++   int i=0;
++   for (i=0;i<SHA1_MAX_LENGTH;i++) {
++       // this can be simplified a lot, but leaving like this to make it easy to debug
++       unsigned char c=0, d=0;
++       c=decode_char(in[i*2]);
++       c=(c*16) & 0xF0;
++       d=decode_char(in[i*2+1]);
++       d=d & 0x0F;
++       c+=d;
++       out[i]=c;
++   }
++}
++
++
++
+ void ma_scramble_41(const unsigned char *buffer, const char *scramble, const char *password)
+ {
+ 	_MA_SHA1_CTX context;
+@@ -105,10 +134,15 @@
+ 	unsigned char sha2[SHA1_MAX_LENGTH];
+ 	
+ 
+-	/* Phase 1: hash password */
+-	ma_SHA1Init(&context);
+-	ma_SHA1Update(&context, (unsigned char *)password, strlen((char *)password));
+-	ma_SHA1Final(sha1, &context);
++	if (password[0]=='*') {
++		unhex_pass(sha1,password+1);
++	} else {
++		/* Phase 1: hash password */
++		ma_SHA1Init(&context);
++		ma_SHA1Update(&context, (unsigned char *)password, strlen((char *)password));
++		ma_SHA1Final(sha1, &context);
++	}
++
+ 
+ 	/* Phase 2: hash sha1 */
+ 	ma_SHA1Init(&context);
+diff -ru mariadb-connector-c-3.1.4-src.orig/libmariadb/mariadb_async.c mariadb-connector-c-3.1.4-src/libmariadb/mariadb_async.c
+--- mariadb-connector-c-3.1.4-src.orig/libmariadb/mariadb_async.c	2020-03-23 10:54:23.477352550 -0300
++++ mariadb-connector-c-3.1.4-src/libmariadb/mariadb_async.c	2020-03-23 10:54:23.501352672 -0300
+@@ -479,19 +479,20 @@
+ struct mysql_set_character_set_params {
+   MYSQL *mysql;
+   const char *csname;
++  uint charsetnr;
+ };
+ static void
+ mysql_set_character_set_start_internal(void *d)
+ {
+ MK_ASYNC_INTERNAL_BODY(
+   mysql_set_character_set,
+-  (parms->mysql, parms->csname),
++  (parms->mysql, parms->csname, parms->charsetnr),
+   parms->mysql,
+   int,
+   r_int)
+ }
+ int STDCALL
+-mysql_set_character_set_start(int *ret, MYSQL *mysql, const char *csname)
++mysql_set_character_set_start(int *ret, MYSQL *mysql, const char *csname, uint charsetnr)
+ {
+ MK_ASYNC_START_BODY(
+   mysql_set_character_set,
+@@ -500,6 +501,7 @@
+     WIN_SET_NONBLOCKING(mysql)
+     parms.mysql= mysql;
+     parms.csname= csname;
++    parms.charsetnr= charsetnr;
+   },
+   1,
+   r_int,
+diff -ru mariadb-connector-c-3.1.4-src.orig/libmariadb/mariadb_lib.c mariadb-connector-c-3.1.4-src/libmariadb/mariadb_lib.c
+--- mariadb-connector-c-3.1.4-src.orig/libmariadb/mariadb_lib.c	2020-03-23 10:54:23.478352555 -0300
++++ mariadb-connector-c-3.1.4-src/libmariadb/mariadb_lib.c	2020-03-23 10:54:23.496352646 -0300
+@@ -1515,9 +1515,16 @@
+ 
+   mysql->client_flag= client_flag;
+ 
++   {
++       volatile my_bool net_blocking = ma_pvio_is_blocking(net->pvio);
++       if (!net_blocking)
++           ma_pvio_blocking(net->pvio, TRUE, 0);
+   if (run_plugin_auth(mysql, scramble_data, scramble_len,
+                              scramble_plugin, db))
+     goto error;
++       if (!net_blocking)
++           ma_pvio_blocking(net->pvio, FALSE, 0);
++   }
+ 
+   if (mysql->client_flag & CLIENT_COMPRESS)
+     net->compress= 1;
+@@ -1647,7 +1654,7 @@
+   if (!mysql_real_connect(&tmp_mysql,mysql->host,mysql->user,mysql->passwd,
+ 			  mysql->db, mysql->port, mysql->unix_socket,
+ 			  mysql->client_flag | CLIENT_REMEMBER_OPTIONS) ||
+-      mysql_set_character_set(&tmp_mysql, mysql->charset->csname))
++      mysql_set_character_set(&tmp_mysql, mysql->charset->csname, 0))
+   {
+     if (ctxt)
+       my_context_install_suspend_resume_hook(ctxt, NULL, NULL);
+@@ -1693,6 +1700,7 @@
+ {
+   if (mysql->stmts)
+   {
++/*
+     LIST *li_stmt= mysql->stmts;
+ 
+     for (; li_stmt; li_stmt= li_stmt->next)
+@@ -1701,6 +1709,7 @@
+       stmt->mysql= NULL;
+       SET_CLIENT_STMT_ERROR(stmt, CR_STMT_CLOSED, SQLSTATE_UNKNOWN, function_name);
+     }
++*/
+     mysql->stmts= NULL;
+   }
+ }
+@@ -1970,6 +1979,33 @@
+   return;
+ }
+ 
++void STDCALL
++mysql_close_no_command(MYSQL *mysql)
++{
++  if (mysql)                    /* Some simple safety */
++  {
++
++    if (mysql->methods) {
++            if (mysql->net.pvio) {
++                free_old_query(mysql);
++                mysql->status=MYSQL_STATUS_READY; /* Force command */
++            mysql->options.reconnect=0;
++                end_server(mysql);
++            }
++        }
++    mysql_close_memory(mysql);
++    mysql_close_options(mysql);
++    mysql->host_info=mysql->user=mysql->passwd=mysql->db=0;
++
++    /* Clear pointers for better safety */
++    bzero((char*) &mysql->options,sizeof(mysql->options));
++    mysql->net.pvio= 0;
++    if (mysql->free_me)
++      free(mysql);
++  }
++  return;
++}
++
+ 
+ /**************************************************************************
+ ** Do a query. If query returned rows, free old rows.
+@@ -2036,6 +2072,8 @@
+             old_pos= pos;
+             si_type= (enum enum_session_state_type)net_field_length(&pos);
+             switch(si_type) {
++            case SESSION_TRACK_GTIDS:
++              net_field_length(&pos); /* skip encoding */
+             case SESSION_TRACK_SCHEMA:
+             case SESSION_TRACK_STATE_CHANGE:
+             case SESSION_TRACK_TRANSACTION_CHARACTERISTICS:
+@@ -3474,18 +3512,27 @@
+   mariadb_get_charset_info(mysql, cs);
+ }
+ 
+-int STDCALL mysql_set_character_set(MYSQL *mysql, const char *csname)
++int STDCALL mysql_set_character_set(MYSQL *mysql, const char *csname, uint charsetnr)
+ {
+   const MARIADB_CHARSET_INFO *cs;
+ 
+-  if (!csname)
++  if (!csname && !charsetnr)
+     goto error;
+ 
+-  if ((cs= mysql_find_charset_name(csname)))
+-  {
+-    char buff[64];
++  if (csname) {
++    cs = mysql_find_charset_name(csname);
++  } else {
++    cs = mysql_find_charset_nr(charsetnr); 
++  }
++  if (cs)
++  {
++    char buff[128];
++    if (csname) { // default behavior
++      snprintf(buff, 127, "SET NAMES %s", cs->csname);
++    } else {
++      snprintf(buff, 127, "SET NAMES %s COLLATE '%s'", cs->csname, cs->name);
++    }
+ 
+-    snprintf(buff, 63, "SET NAMES %s", cs->csname);
+     if (!mysql_real_query(mysql, buff, (unsigned long)strlen(buff)))
+     {
+       mysql->charset= cs;
+@@ -3494,6 +3541,7 @@
+   }
+ 
+ error:
++  if (!cs)
+   my_set_error(mysql, CR_CANT_READ_CHARSET, SQLSTATE_UNKNOWN,
+                0, csname, "compiled_in");
+   return(mysql->net.last_errno);
+diff -ru mariadb-connector-c-3.1.4-src.orig/libmariadb/mariadb_stmt.c mariadb-connector-c-3.1.4-src/libmariadb/mariadb_stmt.c
+--- mariadb-connector-c-3.1.4-src.orig/libmariadb/mariadb_stmt.c	2020-03-23 10:54:23.478352555 -0300
++++ mariadb-connector-c-3.1.4-src/libmariadb/mariadb_stmt.c	2020-03-23 10:54:23.493352631 -0300
+@@ -133,6 +133,7 @@
+   case MYSQL_TYPE_TIMESTAMP:
+   case MYSQL_TYPE_TINY:
+   case MYSQL_TYPE_TINY_BLOB:
++  case MYSQL_TYPE_VARCHAR:
+   case MYSQL_TYPE_VAR_STRING:
+   case MYSQL_TYPE_YEAR:
+     return 1;
+@@ -1231,6 +1232,7 @@
+         break;
+       case MYSQL_TYPE_STRING:
+       case MYSQL_TYPE_JSON:
++      case MYSQL_TYPE_VARCHAR:
+       case MYSQL_TYPE_VAR_STRING:
+       case MYSQL_TYPE_BLOB:
+       case MYSQL_TYPE_TINY_BLOB:
+diff -ru mariadb-connector-c-3.1.4-src.orig/unittest/libmariadb/basic-t.c mariadb-connector-c-3.1.4-src/unittest/libmariadb/basic-t.c
+--- mariadb-connector-c-3.1.4-src.orig/unittest/libmariadb/basic-t.c	2020-03-23 10:54:23.486352595 -0300
++++ mariadb-connector-c-3.1.4-src/unittest/libmariadb/basic-t.c	2020-03-23 10:54:23.526352799 -0300
+@@ -48,7 +48,7 @@
+   rc= mysql_query(mysql, "CREATE TABLE a (a varchar(200))");
+   check_mysql_rc(rc, mysql);
+ 
+-  rc= mysql_set_character_set(mysql, "utf8");
++  rc= mysql_set_character_set(mysql, "utf8", 0);
+   check_mysql_rc(rc, mysql);
+ 
+   for (i=0; i < 10; i++)
+diff -ru mariadb-connector-c-3.1.4-src.orig/unittest/libmariadb/charset.c mariadb-connector-c-3.1.4-src/unittest/libmariadb/charset.c
+--- mariadb-connector-c-3.1.4-src.orig/unittest/libmariadb/charset.c	2020-03-23 10:54:23.486352595 -0300
++++ mariadb-connector-c-3.1.4-src/unittest/libmariadb/charset.c	2020-03-23 10:54:23.535352844 -0300
+@@ -74,12 +74,12 @@
+   char *csname= (char*) "utf8";
+   char *csdefault= (char*)mysql_character_set_name(mysql);
+ 
+-  FAIL_IF(mysql_set_character_set(mysql, csname), mysql_error(mysql));
++  FAIL_IF(mysql_set_character_set(mysql, csname, 0), mysql_error(mysql));
+ 
+   mysql_get_character_set_info(mysql, &cs);
+ 
+   FAIL_IF(strcmp(cs.csname, "utf8") || strcmp(cs.name, "utf8_general_ci"), "Character set != UTF8");
+-  FAIL_IF(mysql_set_character_set(mysql, csdefault), mysql_error(mysql));
++  FAIL_IF(mysql_set_character_set(mysql, csdefault, 0), mysql_error(mysql));
+ 
+   return OK;
+ }
+@@ -543,7 +543,7 @@
+   }
+   /* Retrieve character set information. */
+ 
+-  mysql_set_character_set(mysql, "latin1");
++  mysql_set_character_set(mysql, "latin1", 0);
+   bug30472_retrieve_charset_info(mysql,
+                                  character_set_name_1,
+                                  character_set_client_1,
+@@ -552,7 +552,7 @@
+ 
+   /* Switch client character set. */
+ 
+-  FAIL_IF(mysql_set_character_set(mysql, "utf8"), "Setting cs to utf8 failed");
++  FAIL_IF(mysql_set_character_set(mysql, "utf8", 0), "Setting cs to utf8 failed");
+ 
+   /* Retrieve character set information. */
+ 
+@@ -582,7 +582,7 @@
+   /* Call mysql_change_user() with the same username, password, database. */
+ 
+   rc= mysql_change_user(mysql, username, password, (schema) ? schema : "test");
+-  mysql_set_character_set(mysql, "latin1");
++  mysql_set_character_set(mysql, "latin1", 0);
+   check_mysql_rc(rc, mysql);
+ 
+   /* Retrieve character set information. */
+@@ -648,7 +648,7 @@
+     /* ignore ucs2 */
+     if (strcmp(row[0], "ucs2") && strcmp(row[0], "utf16le") && strcmp(row[0], "utf8mb4") && 
+         strcmp(row[0], "utf16") && strcmp(row[0], "utf32")) {
+-      rc= mysql_set_character_set(mysql, row[0]);
++      rc= mysql_set_character_set(mysql, row[0], 0);
+       check_mysql_rc(rc, mysql);
+     }
+   }
+@@ -749,7 +749,7 @@
+ 
+   if (strcmp(osname, "utf8"))
+   {
+-    rc= mysql_set_character_set(mysql, "utf8");
++    rc= mysql_set_character_set(mysql, "utf8", 0);
+     check_mysql_rc(rc, mysql);
+ 
+     csname2= mysql_character_set_name(mysql);
+@@ -757,7 +757,7 @@
+ 
+     FAIL_IF(!strcmp(csname2, csname1), "Wrong charset: expected utf8");
+ 
+-    rc= mysql_set_character_set(mysql, "auto");
++    rc= mysql_set_character_set(mysql, "auto", 0);
+     check_mysql_rc(rc, mysql);
+ 
+     csname2= mysql_character_set_name(mysql);
