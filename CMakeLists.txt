@@ -3,7 +3,27 @@ cmake_minimum_required(VERSION 3.10)
 # set the project name
 project(proxysql VERSION 2.0.11)
 
+# Call it using:
+# cmake -H. -B _builds
+# cmakme --build _builds --type Release
+#
+# More complete example (FreeBSD):
+#  cmake -H. -B_builds -DCMAKE_INSTALL_RPATH_USE_LINK_PATH=YES -DCMAKE_VERBOSE_MAKEFILE:BOOL=ON \
+#   -DWITH_CLICKHOUSE=OFF -DCMAKE_C_COMPILER="/usr/local/bin/gcc" -DCMAKE_CXX_COMPILER="/usr/local/bin/g++"
+
 include(ExternalProject)
+include(FeatureSummary)
+include(CheckCCompilerFlag)
+include(CheckCXXCompilerFlag)
+include(CheckCXXSourceCompiles)
+
+option(WITH_CLICKHOUSE "Enable building of clickhouse proxy" ON)
+add_feature_info(Clickhouse WITH_CLICKHOUSE "Enable building with support for proxying clickhouse.")
+
+option(WITH_JEMALLOC "Enable building using jemalloc" ON)
+add_feature_info(jemalloc WITH_JEMALLOC "Enable building with support for jemalloc.")
+
+
 MESSAGE(STATUS "SYSTEM processor: ${CMAKE_SYSTEM_PROCESSOR}")
 SET(CPACK_PACKAGE_VENDOR "sysown")
 SET(CPACK_PACKAGE_DESCRIPTION "High-performance MySQL proxy with a GPL license")
@@ -33,6 +53,39 @@ include(CPack)
 # specify the C++ standard
 set(CMAKE_CXX_STANDARD 11)
 set(CMAKE_CXX_STANDARD_REQUIRED True)
+set(CMAKE_POSITION_INDEPENDENT_CODE TRUE)
+
+if (CMAKE_BUILD_TYPE STREQUAL "DEBUG")
+	set(CMAKE_C_FLAGS "-O0 -ggdb")
+	set(CMAKE_C_FLAGS_DEBUG "-O0 -ggdb")
+	set(CMAKE_C_FLAGS_RELEASE "-O0 -ggdb")
+	set(CMAKE_CXX_FLAGS "-O0 -ggdb")
+	set(CMAKE_CXX_FLAGS_DEBUG "-O0 -ggdb")
+endif()
+
+if (CMAKE_SYSTEM_NAME STREQUAL "FreeBSD")
+  # cmake -H. -B_builds -DCMAKE_INSTALL_RPATH_USE_LINK_PATH=YES -DCMAKE_VERBOSE_MAKEFILE:BOOL=ON
+  # -DWITH_CLICKHOUSE=OFF -DCMAKE_C_COMPILER="/usr/local/bin/gcc" -DCMAKE_CXX_COMPILER="/usr/local/bin/g++"
+
+    if (CMAKE_CXX_COMPILER_ID STREQUAL "Clang")
+      message("FreeBSD:c++ Clang ${CMAKE_CXX_COMPILER_VERSION}")
+      add_compile_options (-stdlib=libc++)
+    elseif (CMAKE_CXX_COMPILER_ID STREQUAL "GNU")
+        message("FreeBSD:g++ ${CMAKE_CXX_COMPILER_VERSION}")
+        # if multiple g++ versions are installed, pick the right libraries
+        # XXX this is brittle: update for g++7, g++8, ...
+        if (CMAKE_CXX_COMPILER_VERSION VERSION_GREATER "8.0.0")
+            message("Supported GCC detected")
+	    #set (CMAKE_EXE_LINKER_FLAGS "-lstdc++ -lc++ -lm -lc -lgcc_s -lgcc")
+	    set (CMAKE_EXE_LINKER_FLAGS "-lstdc++ -lc++ -lc")
+            set (CMAKE_EXE_LINKER_FLAGS "-Wl,-rpath=/usr/local/lib/gcc9 ${CMAKE_EXE_LINKER_FLAGS}")
+        endif()
+    else()
+        message("FreeBSD:unknown")
+    endif()
+endif()
+
+SET(PATCHES_DIR ${CMAKE_CURRENT_SOURCE_DIR}/patches)
 
 find_program(MAKE_EXE NAMES gmake nmake make)
 
@@ -52,7 +105,25 @@ else()
   set(repo_git_version "undefined")
 endif()
 
+find_package(Iconv REQUIRED)
+if (Iconv_FOUND)
+  message(STATUS "Using Iconv")
+endif()
+
+find_package(Backtrace REQUIRED)
+
+if (Backtrace_FOUND)
+  configure_file(${PROJECT_SOURCE_DIR}/include/backtrace.h.in ${PROJECT_SOURCE_DIR}/include/backtrace.h)
+  message(STATUS "Configuring Backtrace")
+else()
+  message(WARNING "No Backtrace library found.")
+endif()
+
 add_definitions(-DGITVERSION="$(repo_git_version)")
+
+if (WITH_JEMALLOC)
+  add_definitions(-DJEMALLOC)
+endif()
 
 # Require GNU TLS for building the libmicrohttpd library
 find_package(GnuTLS REQUIRED)
@@ -87,13 +158,17 @@ set(JSON_BuildTests OFF CACHE INTERNAL "")
 # include(...) for pulling in other CMake projects anyways.
 add_subdirectory("${PROJECT_SOURCE_DIR}/external/nlohmann_json")
 
-SET(PATCHES_DIR ${CMAKE_CURRENT_SOURCE_DIR}/patches)
+
+###
+### This whole ExternalProject part could be changed for Hunter mostly.
+### See https://hunter.readthedocs.io/en/latest/overview.html
+###
 
 ExternalProject_Add(libconfig_ext
 	PREFIX						deps
   URL               https://hyperrealm.github.io/libconfig/dist/libconfig-1.7.2.tar.gz
   URL_HASH          SHA1=1da1e7f4e0e376582a8414d2be1acc9dbf6649b5
-  CONFIGURE_COMMAND ./configure
+  CONFIGURE_COMMAND CFLAGS=${CMAKE_C_FLAGS} CXXFLAGS=${CMAKE_CXX_FLAGS} CC=${CMAKE_C_COMPILER} CXX=${CMAKE_CXX_COMPILER} ./configure
   BUILD_IN_SOURCE 1
   BUILD_COMMAND     ${MAKE_EXE}
   UPDATE_COMMAND ""
@@ -102,14 +177,16 @@ ExternalProject_Add(libconfig_ext
 
 SET(LIBCONFIG_INCLUDE_DIR ${CMAKE_CURRENT_BINARY_DIR}/deps/src/libconfig_ext/lib)
 SET(LIBCONFIG_LIB_DIR ${CMAKE_CURRENT_BINARY_DIR}/deps/src/libconfig_ext/lib/.libs)
+add_library(libconfig STATIC IMPORTED)
 add_library(libconfig++ STATIC IMPORTED)
+set_target_properties(libconfig PROPERTIES IMPORTED_LOCATION ${LIBCONFIG_LIB_DIR}/libconfig.a)
 set_target_properties(libconfig++ PROPERTIES IMPORTED_LOCATION ${LIBCONFIG_LIB_DIR}/libconfig++.a)
 
 ExternalProject_Add(libdaemon_ext
 	PREFIX						deps
   URL               http://0pointer.de/lennart/projects/libdaemon/libdaemon-0.14.tar.gz
   URL_HASH          SHA1=78a4db58cf3a7a8906c35592434e37680ca83b8f
-  CONFIGURE_COMMAND ./configure --disable-examples
+  CONFIGURE_COMMAND CFLAGS=${CMAKE_C_FLAGS} CXXFLAGS=${CMAKE_CXX_FLAGS} CC=${CMAKE_C_COMPILER} CXX=${CMAKE_CXX_COMPILER} ./configure --disable-examples
   BUILD_IN_SOURCE 1
   BUILD_COMMAND     ${MAKE_EXE}
   UPDATE_COMMAND ""
@@ -121,28 +198,31 @@ SET(LIBDAEMON_LIB_DIR ${CMAKE_CURRENT_BINARY_DIR}/deps/src/libdaemon_ext/libdaem
 add_library(libdaemon STATIC IMPORTED)
 set_target_properties(libdaemon PROPERTIES IMPORTED_LOCATION ${LIBDAEMON_LIB_DIR}/libdaemon.a)
 
+if (WITH_JEMALLOC)
 
-ExternalProject_Add(jemalloc_ext
-	PREFIX						deps
-  URL               https://github.com/jemalloc/jemalloc/releases/download/5.2.1/jemalloc-5.2.1.tar.bz2
-  URL_HASH          SHA1=9e06b5cc57fd185379d007696da153893cf73e30
-  CONFIGURE_COMMAND ./configure
-  BUILD_IN_SOURCE 1
-  BUILD_COMMAND     ${MAKE_EXE}
-  UPDATE_COMMAND ""
-  INSTALL_COMMAND ""
-)
+  ExternalProject_Add(jemalloc_ext
+    PREFIX						deps
+    URL               https://github.com/jemalloc/jemalloc/releases/download/5.2.1/jemalloc-5.2.1.tar.bz2
+    URL_HASH          SHA1=9e06b5cc57fd185379d007696da153893cf73e30
+    CONFIGURE_COMMAND CFLAGS=${CMAKE_C_FLAGS} CXXFLAGS=${CMAKE_CXX_FLAGS} CC=${CMAKE_C_COMPILER} CXX=${CMAKE_CXX_COMPILER} ./configure
+    BUILD_IN_SOURCE 1
+    BUILD_COMMAND     ${MAKE_EXE}
+    UPDATE_COMMAND ""
+    INSTALL_COMMAND ""
+  )
 
-SET(JEMALLOC_INCLUDE_DIR ${CMAKE_CURRENT_BINARY_DIR}/deps/src/jemalloc_ext/include/jemalloc)
-SET(JEMALLOC_LIB_DIR ${CMAKE_CURRENT_BINARY_DIR}/deps/src/jemalloc_ext/lib)
-add_library(jemalloc STATIC IMPORTED)
-set_target_properties(jemalloc PROPERTIES IMPORTED_LOCATION ${JEMALLOC_LIB_DIR}/libjemalloc.a)
+  SET(JEMALLOC_INCLUDE_DIR ${CMAKE_CURRENT_BINARY_DIR}/deps/src/jemalloc_ext/include/jemalloc)
+  SET(JEMALLOC_LIB_DIR ${CMAKE_CURRENT_BINARY_DIR}/deps/src/jemalloc_ext/lib)
+  add_library(jemalloc STATIC IMPORTED)
+  set_target_properties(jemalloc PROPERTIES IMPORTED_LOCATION ${JEMALLOC_LIB_DIR}/libjemalloc.a)
+
+endif (WITH_JEMALLOC)
 
 ExternalProject_Add(cityhash_ext
 	PREFIX						deps
   URL               https://github.com/google/cityhash/archive/master.zip
   URL_HASH          SHA1=6c527dfc36ba12157113163e7666a3d501a77077
-  CONFIGURE_COMMAND ./configure
+  CONFIGURE_COMMAND CFLAGS=${CMAKE_C_FLAGS} CXXFLAGS=${CMAKE_CXX_FLAGS} CC=${CMAKE_C_COMPILER} CXX=${CMAKE_CXX_COMPILER} ./configure
   BUILD_IN_SOURCE 1
   BUILD_COMMAND     ${MAKE_EXE}
   UPDATE_COMMAND ""
@@ -160,7 +240,7 @@ ExternalProject_Add(libinjection_ext
   URL_HASH          SHA1=74a2b44f8fe946f82df7f471258190230cd6d3a4
   CONFIGURE_COMMAND ""
   BUILD_IN_SOURCE 1
-  BUILD_COMMAND     ${MAKE_EXE} -C src all
+  BUILD_COMMAND     env python=${Python2} ${MAKE_EXE} -C src all
   UPDATE_COMMAND    ""
   INSTALL_COMMAND   ""
   PATCH_COMMAND     ${LIBINJECTION_PATCH_COMMAND}
@@ -175,7 +255,7 @@ ExternalProject_Add(openssl_ext
 	PREFIX						deps
   URL               https://github.com/openssl/openssl/archive/OpenSSL_1_1_1d.tar.gz
   URL_HASH          SHA1=df0ee4811c87c209ebadb4e6b203d1e560d00f9a
-  CONFIGURE_COMMAND ./config no-ssl3
+  CONFIGURE_COMMAND CFLAGS=${CMAKE_C_FLAGS} CXXFLAGS=${CMAKE_CXX_FLAGS} CC=${CMAKE_C_COMPILER} CXX=${CMAKE_CXX_COMPILER} ./config no-shared enable-egd
   BUILD_IN_SOURCE 1
   BUILD_COMMAND     ${MAKE_EXE}
   UPDATE_COMMAND    ""
@@ -195,16 +275,17 @@ ExternalProject_Add(curl_ext
 	PREFIX						deps
   URL               https://github.com/curl/curl/releases/download/curl-7_69_1/curl-7.69.1.tar.bz2
   URL_HASH          SHA1=f330c29aef026faff98bc0d712cbbe3c00d5c06e
-    CONFIGURE_COMMAND ./configure --disable-debug --disable-ftp --disable-ldap --disable-ldaps --disable-rtsp
-                        --disable-dict --disable-telnet --disable-tftp --disable-pop3 --disable-imap
-                        --disable-smb --disable-smtp --disable-gopher --disable-manual --disable-ipv6 --disable-sspi
-                        --disable-crypto-auth --disable-ntlm-wb --disable-tls-srp --without-nghttp2 --without-libidn2
-                        --without-depssh2 --without-brotli --disable-shared --with-ssl=${OPENSSL_DIR}
+  CONFIGURE_COMMAND CFLAGS=${CMAKE_C_FLAGS} CXXFLAGS=${CMAKE_CXX_FLAGS} CC=${CMAKE_C_COMPILER} CXX=${CMAKE_CXX_COMPILER} LDFLAGS=-L${OPENSSL_LIB_DIR} ./configure --disable-debug --disable-ftp --disable-ldap
+                      --disable-ldaps --disable-rtsp --disable-dict --disable-telnet --disable-tftp --disable-pop3 --disable-imap
+                      --disable-smb --disable-smtp --disable-gopher --disable-manual --disable-ipv6 --disable-sspi
+                      --disable-crypto-auth --disable-ntlm-wb --disable-tls-srp --without-nghttp2 --without-libidn2
+                      --without-depssh2 --without-brotli --disable-shared --with-ssl=${OPENSSL_DIR}
   BUILD_IN_SOURCE 1
   BUILD_COMMAND     ${MAKE_EXE}
   UPDATE_COMMAND    ""
   INSTALL_COMMAND   ""
   PATCH_COMMAND			""
+  DEPENDS           openssl_ext
 )
 
 SET(CURL_LIB_DIR ${CMAKE_CURRENT_BINARY_DIR}/deps/src/curl_ext/lib/.libs)
@@ -216,7 +297,7 @@ ExternalProject_Add(libev_ext
 	PREFIX						deps
   URL               http://dist.schmorp.de/libev/Attic/libev-4.24.tar.gz
   URL_HASH          SHA1=436dd8eff00a45f8805b8cacfe4dd3bd993caedb
-  CONFIGURE_COMMAND "./configure"
+  CONFIGURE_COMMAND CFLAGS=${CMAKE_C_FLAGS} CXXFLAGS=${CMAKE_CXX_FLAGS} CC=${CMAKE_C_COMPILER} CXX=${CMAKE_CXX_COMPILER} ./configure
   BUILD_IN_SOURCE 1
   BUILD_COMMAND     ${MAKE_EXE}
   UPDATE_COMMAND    ""
@@ -225,7 +306,7 @@ ExternalProject_Add(libev_ext
 )
 
 SET(LIBEV_LIB_DIR ${CMAKE_CURRENT_BINARY_DIR}/deps/src/libev_ext/.libs)
-SET(LIBEV_INCLUDE_DIR ${CMAKE_CURRENT_BINARY_DIR}/deps/src/libev_ext/include)
+SET(LIBEV_INCLUDE_DIR ${CMAKE_CURRENT_BINARY_DIR}/deps/src/libev_ext/)
 add_library(libev STATIC IMPORTED)
 set_target_properties(libev PROPERTIES IMPORTED_LOCATION ${LIBEV_LIB_DIR}/libev.a)
 
@@ -234,6 +315,7 @@ ExternalProject_Add(libre2_ext
   URL               https://github.com/google/re2/archive/2018-07-01.tar.gz
   URL_HASH          SHA1=a66685c9876fc5d3412e0134feb45e353c1c4b3b
   BUILD_IN_SOURCE 1
+  CMAKE_ARGS        -DCMAKE_C_FLAGS=${CMAKE_C_FLAGS} -DCMAKE_CXX_FLAGS=${CMAKE_CXX_FLAGS} -DCMAKE_C_COMPILER=${CMAKE_C_COMPILER} -DCMAKE_CXX_COMPILER=${CMAKE_CXX_COMPILER} -DRE2_BUILD_TESTING=OFF -DBUILD_TESTING=OFF
   UPDATE_COMMAND    ""
   INSTALL_COMMAND   ""
   PATCH_COMMAND			""
@@ -248,7 +330,7 @@ ExternalProject_Add(libmicrohttpd_ext
 	PREFIX						deps
   URL               https://ftp.gnu.org/gnu/libmicrohttpd/libmicrohttpd-0.9.68.tar.gz
   URL_HASH          SHA1=ed1a586727673de25c27ff294700620a39671024
-  CONFIGURE_COMMAND ./configure --enable-https
+  CONFIGURE_COMMAND CFLAGS=${CMAKE_C_FLAGS} CXXFLAGS=${CMAKE_CXX_FLAGS} CC=${CMAKE_C_COMPILER} CXX=${CMAKE_CXX_COMPILER} ./configure --enable-https
   BUILD_IN_SOURCE 1
   BUILD_COMMAND     ${MAKE_EXE}
   UPDATE_COMMAND    ""
@@ -270,27 +352,36 @@ set_target_properties(microhttpd PROPERTIES IMPORTED_LOCATION ${LIBMICROHTTPD_LI
 
 #message(STATUS "Using LIBMICROHTTP_CPPFLAGS ${LIBMICROHTTP_CPPFLAGS}")
 
+if (CMAKE_SYSTEM_NAME STREQUAL "FreeBSD")
+set(libhttpserver_patch_cmd	patch -p1 < ${PATCHES_DIR}/libhttpserver_freebsd.patch)
+else()
+set(libhttpserver_patch_cmd "")
+endif()
+
+# Note: This project needs GNU make
 ExternalProject_Add(libhttpserver_ext
 	PREFIX						deps
   URL        				https://github.com/etr/libhttpserver/archive/master.zip
   URL_HASH          SHA1=c5564db0623e1f202b3c496a451b9fb474af4109
-  CONFIGURE_COMMAND ./bootstrap && mkdir build && cd build &&
-                      CPPFLAGS=-I${LIBMICROHTTPD_INCLUDE_DIR} LIBS=-lmicrohttpd LDFLAGS=-L${LIBMICROHTTPD_LIB_DIR}
+  CONFIGURE_COMMAND rm -rf build && MAKE=${MAKE_EXE} autoreconf -i && mkdir build && cd build && CFLAGS=${CMAKE_C_FLAGS}
+                      CXXFLAGS=${CMAKE_CXX_FLAGS} CC=${CMAKE_C_COMPILER} CXX=${CMAKE_CXX_COMPILER}
+                      MAKE=${MAKE_EXE} CPPFLAGS=-I${LIBMICROHTTPD_INCLUDE_DIR} LIBS=-lmicrohttpd LDFLAGS=-L${LIBMICROHTTPD_LIB_DIR}
                       LD_LIBRARY_PATH=${LIBMICROHTTPD_LIB_DIR} ../configure --enable-static --disable-shared
-                        --disable-doxygen-doc --disable-doxygen-dot
-                        --disable-doxygen-man --disable-doxygen-html
+                        --disable-doxygen-doc --disable-doxygen-dot --disable-doxygen-man --disable-doxygen-html
+                        --disable-examples
   BUILD_IN_SOURCE 1
   BUILD_COMMAND     ${MAKE_EXE} -C build
   UPDATE_COMMAND    ""
   INSTALL_COMMAND   ""
-  PATCH_COMMAND			""
+  PATCH_COMMAND			${libhttpserver_patch_cmd}
+  DEPENDS           libmicrohttpd_ext
 )
 
 SET(LIBHTTPSERVER_LIB_DIR ${CMAKE_CURRENT_BINARY_DIR}/deps/src/libhttpserver_ext/build/src/.libs)
 SET(LIBHTTPSERVER_INCLUDE_DIR ${CMAKE_CURRENT_BINARY_DIR}/deps/src/libhttpserver_ext/src)
-add_library(libhttpserver STATIC IMPORTED)
-set_target_properties(libhttpserver PROPERTIES IMPORTED_LOCATION ${LIBHTTPSERVER_LIB_DIR}/libhttpserver.a)
-add_dependencies(libhttpserver libmicrohttpd)
+add_library(httpserver STATIC IMPORTED)
+set_target_properties(httpserver PROPERTIES IMPORTED_LOCATION ${LIBHTTPSERVER_LIB_DIR}/libhttpserver.a)
+add_dependencies(httpserver libmicrohttpd_ext)
 
 ExternalProject_Add(lz4_ext
 	PREFIX						deps
@@ -314,12 +405,16 @@ ExternalProject_Add(mariadb-client-library_ext
   GIT_REPOSITORY 		https://github.com/mariadb-corporation/mariadb-connector-c.git
 	GIT_TAG						v3.1.4
   BUILD_IN_SOURCE 1
-  CMAKE_ARGS        -DWITH_UNIT_TESTS="OFF" -DCMAKE_C_FLAGS_RELWITHDEBINFO="-ggdb" -DCMAKE_CXX_FLAGS_RELWITHDEBINFO="-ggdb"
+  CMAKE_ARGS        -DCMAKE_C_FLAGS=${CMAKE_C_FLAGS} -DCMAKE_CXX_FLAGS=${CMAKE_CXX_FLAGS}
+                    -DCMAKE_C_COMPILER=${CMAKE_C_COMPILER} -DCMAKE_CXX_COMPILER=${CMAKE_CXX_COMPILER}
+                    -DWITH_UNIT_TESTS="OFF" -DCMAKE_C_FLAGS_RELWITHDEBINFO="-ggdb" -DCMAKE_CXX_FLAGS_RELWITHDEBINFO="-ggdb"
                     -DCMAKE_BUILD_TYPE=RelWithDebInfo -DOPENSSL_ROOT_DIR=${OPENSSL_DIR} -DOPENSSL_LIBRARIES=${OPENSSL_LIB_DIR}
-                    -DCLIENT_PLUGIN_MYSQL_CLEAR_PASSWORD=STATIC -DCLIENT_PLUGIN_SHA256_PASSWORD=STATIC -DCLIENT_PLUGIN_CACHING_SHA2_PASSWORD=STATIC
+                    -DCLIENT_PLUGIN_MYSQL_CLEAR_PASSWORD=STATIC -DCLIENT_PLUGIN_SHA256_PASSWORD=STATIC
+                    -DCLIENT_PLUGIN_CACHING_SHA2_PASSWORD=STATIC
   PATCH_COMMAND			patch -p1 < ${PATCHES_DIR}/mariadb-connector-c-unified.patch
   UPDATE_COMMAND    ""
   INSTALL_COMMAND   ""
+  DEPENDS           openssl_ext
 )
 
 SET(MARIADB_CLIENT_LIB_DIR ${CMAKE_CURRENT_BINARY_DIR}/deps/src/mariadb-client-library_ext/libmariadb)
@@ -331,7 +426,7 @@ ExternalProject_Add(pcre_ext
 	PREFIX						deps
   URL               https://ftp.pcre.org/pub/pcre/pcre-8.39.tar.gz
   URL_HASH          SHA1=b3aec1f643d9701841e2f9d57ac121a7ff448fc8
-  CONFIGURE_COMMAND ./configure
+  CONFIGURE_COMMAND CFLAGS=${CMAKE_C_FLAGS} CXXFLAGS=${CMAKE_CXX_FLAGS} CC=${CMAKE_C_COMPILER} CXX=${CMAKE_CXX_COMPILER} ./configure
   BUILD_IN_SOURCE 1
   BUILD_COMMAND     ${MAKE_EXE}
   UPDATE_COMMAND    ""
@@ -340,9 +435,30 @@ ExternalProject_Add(pcre_ext
 )
 
 SET(PCRE_LIB_DIR ${CMAKE_CURRENT_BINARY_DIR}/deps/src/pcre_ext/.libs)
-SET(PCRE_INCLUDE_DIR ${CMAKE_CURRENT_BINARY_DIR}/deps/src/pcre_ext/include)
+SET(PCRE_INCLUDE_DIR ${CMAKE_CURRENT_BINARY_DIR}/deps/src/pcre_ext)
+add_library(pcre STATIC IMPORTED)
+set_target_properties(pcre PROPERTIES IMPORTED_LOCATION ${PCRE_LIB_DIR}/libpcre.a)
 add_library(pcrecpp STATIC IMPORTED)
 set_target_properties(pcrecpp PROPERTIES IMPORTED_LOCATION ${PCRE_LIB_DIR}/libpcrecpp.a)
+
+# Needs GnuTLS static library for compiling
+# ExternalProject_Add(gnutls_ext
+# 	PREFIX						deps
+#   URL               https://www.gnupg.org/ftp/gcrypt/gnutls/v3.6/gnutls-3.6.12.tar.xz
+#   URL_HASH          SHA1=fa498b4d026e3ddfa74aa79adac27bfcd14e8b76
+#   CONFIGURE_COMMAND ./configure
+#   BUILD_IN_SOURCE 1
+#   BUILD_COMMAND     ${MAKE_EXE}
+#   UPDATE_COMMAND    ""
+#   INSTALL_COMMAND   ""
+#   PATCH_COMMAND			""
+# )
+
+# SET(GNUTLS_LIB_DIR ${CMAKE_CURRENT_BINARY_DIR}/deps/src/gnutls_ext/.libs)
+# SET(GNUTLS_INCLUDE_DIR ${CMAKE_CURRENT_BINARY_DIR}/deps/src/gnutls_ext)
+# add_library(gnutls STATIC IMPORTED)
+# set_target_properties(gnutls PROPERTIES IMPORTED_LOCATION ${GNUTLS_LIB_DIR}/libgnutls.a)
+
 
 ExternalProject_Add(sqlite3_ext
 	PREFIX						deps
@@ -358,58 +474,106 @@ ExternalProject_Add(sqlite3_ext
 
 
 SET(SQLITE3_DIR ${CMAKE_CURRENT_BINARY_DIR}/deps/src/sqlite3_ext)
-SET(SQLITE3_LIB_DIR ${CMAKE_CURRENT_BINARY_DIR}/deps/src/sqlite3_ext/lib)
-SET(SQLITE3_INCLUDE_DIR ${CMAKE_CURRENT_BINARY_DIR}/deps/src/sqlite3_ext/include)
+SET(SQLITE3_LIB_DIR ${CMAKE_CURRENT_BINARY_DIR}/deps/src/sqlite3_ext)
+SET(SQLITE3_INCLUDE_DIR ${CMAKE_CURRENT_BINARY_DIR}/deps/src/sqlite3_ext)
 add_library(sqlite3 STATIC IMPORTED)
 set_target_properties(sqlite3 PROPERTIES IMPORTED_LOCATION ${SQLITE3_DIR}/sqlite3.o)
 
-add_library(libproxysql STATIC lib/ProxySQL_GloVars.cpp lib/network.cpp lib/debug.cpp lib/configfile.cpp lib/Query_Cache.cpp
+SET(libproxysql_FILES lib/ProxySQL_GloVars.cpp lib/network.cpp lib/debug.cpp lib/configfile.cpp lib/Query_Cache.cpp
             lib/SpookyV2.cpp lib/MySQL_Authentication.cpp lib/gen_utils.cpp lib/sqlite3db.cpp lib/mysql_connection.cpp
             lib/MySQL_HostGroups_Manager.cpp lib/mysql_data_stream.cpp lib/MySQL_Thread.cpp lib/MySQL_Session.cpp lib/MySQL_Protocol.cpp
             lib/mysql_backend.cpp lib/Query_Processor.cpp lib/ProxySQL_Admin.cpp lib/ProxySQL_Config.cpp lib/ProxySQL_Restapi.cpp
             lib/MySQL_Monitor.cpp lib/MySQL_Logger.cpp lib/thread.cpp lib/MySQL_PreparedStatement.cpp lib/ProxySQL_Cluster.cpp
-            lib/ClickHouse_Authentication.cpp lib/ClickHouse_Server.cpp lib/ProxySQL_Statistics.cpp lib/Chart_bundle_js.cpp
+             lib/ProxySQL_Statistics.cpp lib/Chart_bundle_js.cpp
             lib/ProxySQL_HTTP_Server.cpp lib/ProxySQL_RESTAPI_Server.cpp lib/font-awesome.min.css.cpp lib/main-bundle.min.css.cpp
             lib/set_parser.cpp lib/c_tokenizer.c)
 
-add_dependencies(libproxysql jemalloc_ext libev_ext cityhash_ext openssl_ext libmicrohttpd_ext libconfig_ext libhttpserver_ext libdaemon_ext curl_ext pcre_ext libre2_ext lz4_ext mariadb-client-library_ext libinjection_ext)
+if (WITH_CLICKHOUSE)
+  list(APPEND libproxysql_FILES lib/ClickHouse_Authentication.cpp lib/ClickHouse_Server.cpp)
+endif()
 
-target_link_libraries(libproxysql PRIVATE nlohmann_json::nlohmann_json jemalloc libev cityhash libhttpserver ssl libconfig++ libdaemon curl pcrecpp libre2 lz4 mariadbclient libinjection microhttpd)
+add_library(libproxysql STATIC ${libproxysql_FILES})
 
-target_include_directories(libproxysql PRIVATE
-                            "${CMAKE_CURRENT_SOURCE_DIR}/include"
-                            "${MARIADB_CLIENT_INCLUDE_DIR}"
-                            "${MARIADB_CLIENT_INCLUDE_DIR}"
-                            "${OPENSSL_INCLUDE_DIR}"
-                            "${CITIHASH_INCLUDE_DIR}"
-                            "${LIBINJECTION_INCLUDE_DIR}"
-                            "${JEMALLOC_INCLUDE_DIR}"
-                            "${LIBCONFIG_INCLUDE_DIR}"
-                            "${LIBDAEMON_INCLUDE_DIR}"
-                            "${LIBHTTPSERVER_INCLUDE_DIR}"
-                            "${LIBMICROHTTPD_INCLUDE_DIRS}"
-													  "${LIBRE2_INCLUDE_DIR}"
-													  "${PCRE_INCLUDE_DIR}"
-                           )
+SET(libproxysql_DEPS libev_ext cityhash_ext openssl_ext libmicrohttpd_ext libconfig_ext libhttpserver_ext
+                     libdaemon_ext curl_ext pcre_ext libre2_ext lz4_ext mariadb-client-library_ext libinjection_ext)
+
+SET(libproxysql_LIBS httpserver nlohmann_json::nlohmann_json  libev cityhash ssl libdaemon curl pcrecpp pcre
+    lz4 mariadbclient libinjection microhttpd libconfig++ libconfig libre2)
+
+SET(libproxysql_INCLUDES "${CMAKE_CURRENT_SOURCE_DIR}/include"
+                        "${MARIADB_CLIENT_INCLUDE_DIR}"
+                        "${CURL_INCLUDE_DIR}"
+                        "${OPENSSL_INCLUDE_DIR}"
+                        "${CITIHASH_INCLUDE_DIR}"
+                        "${LIBINJECTION_INCLUDE_DIR}"
+                        "${LIBCONFIG_INCLUDE_DIR}"
+                        "${LIBDAEMON_INCLUDE_DIR}"
+                        "${LIBHTTPSERVER_INCLUDE_DIR}"
+                        "${LIBMICROHTTPD_INCLUDE_DIRS}"
+                        "${LIBRE2_INCLUDE_DIR}"
+                        "${PCRE_INCLUDE_DIR}"
+                        "${SQLITE3_INCLUDE_DIR}"
+                        "${LIBEV_INCLUDE_DIR}")
+
+if (WITH_JEMALLOC)
+  list(APPEND libproxysql_DEPS jemalloc_ext)
+  list(APPEND libproxysql_LIBS jemalloc)
+  list(APPEND libproxysql_INCLUDES ${JEMALLOC_INCLUDE_DIR})
+endif()
+
+add_dependencies(libproxysql ${libproxysql_DEPS})
+
+target_link_libraries(libproxysql PRIVATE ${libproxysql_LIBS})
+
+target_include_directories(libproxysql PRIVATE ${libproxysql_INCLUDES})
 
 # add the executable
 add_executable(proxysql src/main.cpp src/proxysql_global.cpp src/SQLite3_Server.cpp)
 
-target_include_directories(proxysql PRIVATE
-                           "${CMAKE_CURRENT_SOURCE_DIR}/include"
-                           "${MARIADB_CLIENT_INCLUDE_DIR}"
-                           "${OPENSSL_INCLUDE_DIR}"
-                           "${CITIHASH_INCLUDE_DIR}"
-                           "${LIBINJECTION_INCLUDE_DIR}"
-                           "${JEMALLOC_INCLUDE_DIR}"
-                           "${LIBCONFIG_INCLUDE_DIR}"
-                           "${LIBDAEMON_INCLUDE_DIR}"
-                           "${LIBHTTPSERVER_INCLUDE_DIR}"
-                           "${LIBMICROHTTPD_INCLUDE_DIRS}"
-                           "${LIBRE2_INCLUDE_DIR}"
-                           "${PCRE_INCLUDE_DIR}"
-                           )
+SET(proxysql_INCLUDES "${CMAKE_CURRENT_SOURCE_DIR}/include"
+                      "${MARIADB_CLIENT_INCLUDE_DIR}"
+                      "${OPENSSL_INCLUDE_DIR}"
+                      "${CITIHASH_INCLUDE_DIR}"
+                      "${LIBINJECTION_INCLUDE_DIR}"
+                      "${LIBCONFIG_INCLUDE_DIR}"
+                      "${LIBDAEMON_INCLUDE_DIR}"
+                      "${LIBHTTPSERVER_INCLUDE_DIR}"
+                      "${LIBMICROHTTPD_INCLUDE_DIRS}"
+                      "${LIBRE2_INCLUDE_DIR}"
+                      "${PCRE_INCLUDE_DIR}"
+                      "${SQLITE3_INCLUDE_DIR}"
+                      "${LIBEV_INCLUDE_DIR}"
+                      "${CURL_INCLUDE_DIR}"
+                      )
 
-add_dependencies(proxysql openssl_ext jemalloc_ext libev_ext cityhash_ext libmicrohttpd_ext libhttpserver_ext libdaemon_ext libconfig_ext curl_ext pcre_ext libre2_ext lz4_ext mariadb-client-library_ext sqlite3_ext)
+if (WITH_JEMALLOC)
+  list(APPEND proxysql_DEPS jemalloc_ext)
+  list(APPEND proxysql_LIBS jemalloc)
+  list(APPEND proxysql_INCLUDES ${JEMALLOC_INCLUDE_DIR})
+endif()
 
-target_link_libraries(proxysql PUBLIC libproxysql nlohmann_json::nlohmann_json dl gnutls pthread curl ssl crypto sqlite3 pcrecpp pcre)
+
+target_include_directories(proxysql PRIVATE ${proxysql_INCLUDES})
+
+add_dependencies(proxysql openssl_ext libev_ext cityhash_ext libmicrohttpd_ext libhttpserver_ext libdaemon_ext libconfig_ext curl_ext pcre_ext libre2_ext lz4_ext mariadb-client-library_ext sqlite3_ext)
+target_compile_features(proxysql PRIVATE cxx_std_11)
+
+target_link_libraries(proxysql PUBLIC "-Wl,--no-whole-archive"
+			 "-Wl,--start-group"
+			libproxysql libdaemon pcrecpp pcre
+			mariadbclient httpserver microhttpd
+			libconfig libconfig++ libinjection
+			curl ssl crypto libev lz4
+			nlohmann_json::nlohmann_json libre2 sqlite3
+			cityhash
+			 "-Wl,--end-group"
+			${Backtrace_LIBRARIES} GnuTLS::GnuTLS dl pthread)
+
+if(PRINT_SUMMARY)
+    # This will print ENABLED, REQUIRED and DISABLED
+    feature_summary(WHAT ALL)
+else()
+    # This will only print ENABLED and DISABLED feature
+    feature_summary(WHAT ENABLED_FEATURES DESCRIPTION "Enabled features:")
+    feature_summary(WHAT DISABLED_FEATURES DESCRIPTION "Disabled features:")
+endif()
