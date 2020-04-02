@@ -3,6 +3,9 @@ cmake_minimum_required(VERSION 3.10)
 # set the project name
 project(proxysql VERSION 2.0.11)
 
+# You can change this using --type Debug
+set(CMAKE_BUILD_TYPE Release)
+
 # Call it using:
 # cmake -H. -B _builds
 # cmakme --build _builds --type Release
@@ -29,16 +32,15 @@ SET(CPACK_PACKAGE_VENDOR "sysown")
 SET(CPACK_PACKAGE_DESCRIPTION "High-performance MySQL proxy with a GPL license")
 SET(CPACK_PACKAGE_NAME "proxysql")
 STRING(TOLOWER ${CMAKE_SYSTEM_NAME} system_name)
+SET(CPACK_PACKAGE_VERSION ${CMAKE_PROJECT_VERSION})
 SET(CPACK_RESOURCE_FILE_LICENSE "${CMAKE_CURRENT_SOURCE_DIR}/LICENSE")
 SET(CPACK_PACKAGE_DESCRIPTION_FILE "${CMAKE_CURRENT_SOURCE_DIR}/README.md")
-SET(CPACK_SOURCE_PACKAGE_FILE_NAME "proxysql${CPACK_PACKAGE_VERSION}-${PACKAGE_STATUS_SUFFIX}-src")
-SET(CPACK_PACKAGE_FILE_NAME "proxysql-${CPACK_PACKAGE_VERSION}-${PACKAGE_STATUS_SUFFIX}-${system_name}-${CMAKE_SYSTEM_PROCESSOR}")
-SET(CPACK_PACKAGE_VERSION_MAJOR 2)
-SET(CPACK_PACKAGE_VERSION_MINOR 0)
-SET(CPACK_PACKAGE_VERSION_PATCH 11)
+SET(CPACK_SOURCE_PACKAGE_FILE_NAME "proxysql${CPACK_PACKAGE_VERSION}-src")
+SET(CPACK_PACKAGE_FILE_NAME "proxysql-${CPACK_PACKAGE_VERSION}-${system_name}-${CMAKE_SYSTEM_PROCESSOR}")
 SET(CPACK_PACKAGE_HOMEPAGE_URL https://www.proxysql.com)
-#SET(CPACK_PROJECT_CONFIG_FILE ${CMAKE_CURRENT_SOURCE_DIR}/src/proxysql.cfg)
-SET(CPACK_SOURCE_GENERATOR "RPM")
+SET(CPACK_DEBIAN_PACKAGE_MAINTAINER "support@proxysql.com")
+SET(CPACK_SOURCE_GENERATOR "DEB RPM")
+include(GNUInstallDirs)
 
 install(PROGRAMS    ${CMAKE_CURRENT_BINARY_DIR}/proxysql
         TYPE        BIN
@@ -105,6 +107,8 @@ else()
   set(repo_git_version "undefined")
 endif()
 
+set(CPACK_PACKAGE_VERSION ${PROJECT_VERSION}-${repo_git_version})
+
 find_package(Iconv REQUIRED)
 if (Iconv_FOUND)
   message(STATUS "Using Iconv")
@@ -119,10 +123,10 @@ else()
   message(WARNING "No Backtrace library found.")
 endif()
 
-add_definitions(-DGITVERSION="$(repo_git_version)")
+add_compile_definitions(GITVERSION="$(repo_git_version)")
 
 if (WITH_JEMALLOC)
-  add_definitions(-DJEMALLOC)
+  add_compile_definitions(JEMALLOC)
 endif()
 
 # Require GNU TLS for building the libmicrohttpd library
@@ -255,7 +259,7 @@ ExternalProject_Add(openssl_ext
 	PREFIX						deps
   URL               https://github.com/openssl/openssl/archive/OpenSSL_1_1_1d.tar.gz
   URL_HASH          SHA1=df0ee4811c87c209ebadb4e6b203d1e560d00f9a
-  CONFIGURE_COMMAND CFLAGS=${CMAKE_C_FLAGS} CXXFLAGS=${CMAKE_CXX_FLAGS} CC=${CMAKE_C_COMPILER} CXX=${CMAKE_CXX_COMPILER} ./config no-shared enable-egd
+  CONFIGURE_COMMAND CFLAGS=${CMAKE_C_FLAGS} CXXFLAGS=${CMAKE_CXX_FLAGS} CC=${CMAKE_C_COMPILER} CXX=${CMAKE_CXX_COMPILER} ./config no-shared threads enable-egd
   BUILD_IN_SOURCE 1
   BUILD_COMMAND     ${MAKE_EXE}
   UPDATE_COMMAND    ""
@@ -490,6 +494,7 @@ SET(libproxysql_FILES lib/ProxySQL_GloVars.cpp lib/network.cpp lib/debug.cpp lib
 
 if (WITH_CLICKHOUSE)
   list(APPEND libproxysql_FILES lib/ClickHouse_Authentication.cpp lib/ClickHouse_Server.cpp)
+  add_compile_definitions(CLICKHOUSE)
 endif()
 
 add_library(libproxysql STATIC ${libproxysql_FILES})
@@ -497,8 +502,8 @@ add_library(libproxysql STATIC ${libproxysql_FILES})
 SET(libproxysql_DEPS libev_ext cityhash_ext openssl_ext libmicrohttpd_ext libconfig_ext libhttpserver_ext
                      libdaemon_ext curl_ext pcre_ext libre2_ext lz4_ext mariadb-client-library_ext libinjection_ext)
 
-SET(libproxysql_LIBS httpserver nlohmann_json::nlohmann_json  libev cityhash ssl libdaemon curl pcrecpp pcre
-    lz4 mariadbclient libinjection microhttpd libconfig++ libconfig libre2)
+SET(libproxysql_LIBS httpserver nlohmann_json::nlohmann_json libev cityhash libdaemon curl pcrecpp pcre
+    lz4 mariadbclient libinjection microhttpd libconfig++ libconfig libre2 ssl crypto)
 
 SET(libproxysql_INCLUDES "${CMAKE_CURRENT_SOURCE_DIR}/include"
                         "${MARIADB_CLIENT_INCLUDE_DIR}"
@@ -563,9 +568,9 @@ target_link_libraries(proxysql PUBLIC "-Wl,--no-whole-archive"
 			libproxysql libdaemon pcrecpp pcre
 			mariadbclient httpserver microhttpd
 			libconfig libconfig++ libinjection
-			curl ssl crypto libev lz4
+			curl libev lz4
 			nlohmann_json::nlohmann_json libre2 sqlite3
-			cityhash
+			cityhash ssl crypto
 			 "-Wl,--end-group"
 			${Backtrace_LIBRARIES} GnuTLS::GnuTLS dl pthread)
 
