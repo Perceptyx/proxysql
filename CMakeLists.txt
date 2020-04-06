@@ -190,9 +190,19 @@ set(JSON_BuildTests OFF CACHE INTERNAL "")
 # unintended consequences that will break the build.  It's generally
 # discouraged (although not necessarily well documented as such) to use
 # include(...) for pulling in other CMake projects anyways.
-add_subdirectory("${PROJECT_SOURCE_DIR}/external/nlohmann_json")
+#add_subdirectory("${PROJECT_SOURCE_DIR}/external/nlohmann_json")
+ExternalProject_Add(json_ext
+	PREFIX						deps
+  URL               https://github.com/nlohmann/json/releases/download/v3.7.3/include.zip
+  URL_HASH          SHA1=9537f01826ba6dcccb180e70f9bbcf2a0122d07a
+  CONFIGURE_COMMAND ""
+  BUILD_IN_SOURCE 1
+  BUILD_COMMAND     ""
+  UPDATE_COMMAND ""
+  INSTALL_COMMAND ""
+)
 
-
+SET(JSON_INCLUDE_DIR ${CMAKE_CURRENT_BINARY_DIR}/deps/src/json_ext/single_include)
 ###
 ### This whole ExternalProject part could be changed for Hunter mostly.
 ### See https://hunter.readthedocs.io/en/latest/overview.html
@@ -530,15 +540,17 @@ endif()
 add_library(libproxysql STATIC ${libproxysql_FILES})
 
 SET(libproxysql_DEPS libev_ext cityhash_ext openssl_ext libmicrohttpd_ext libconfig_ext libhttpserver_ext
-                     libdaemon_ext curl_ext pcre_ext libre2_ext lz4_ext mariadb-client-library_ext libinjection_ext)
+                     libdaemon_ext curl_ext pcre_ext libre2_ext lz4_ext mariadb-client-library_ext
+                     libinjection_ext json_ext)
 
-SET(libproxysql_LIBS httpserver nlohmann_json::nlohmann_json libev cityhash libdaemon curl pcrecpp pcre
+SET(libproxysql_LIBS httpserver libev cityhash libdaemon curl pcrecpp pcre
     lz4 mariadbclient libinjection microhttpd libconfig++ libconfig libre2 ssl crypto)
 
 SET(libproxysql_INCLUDES "${CMAKE_CURRENT_SOURCE_DIR}/include"
                         "${MARIADB_CLIENT_INCLUDE_DIR}"
                         "${CURL_INCLUDE_DIR}"
                         "${OPENSSL_INCLUDE_DIR}"
+                        "${JSON_INCLUDE_DIR}"
                         "${CITIHASH_INCLUDE_DIR}"
                         "${LIBINJECTION_INCLUDE_DIR}"
                         "${LIBCONFIG_INCLUDE_DIR}"
@@ -569,6 +581,7 @@ SET(proxysql_INCLUDES "${CMAKE_CURRENT_SOURCE_DIR}/include"
                       "${MARIADB_CLIENT_INCLUDE_DIR}"
                       "${OPENSSL_INCLUDE_DIR}"
                       "${CITIHASH_INCLUDE_DIR}"
+                      "${JSON_INCLUDE_DIR}"
                       "${LIBINJECTION_INCLUDE_DIR}"
                       "${LIBCONFIG_INCLUDE_DIR}"
                       "${LIBDAEMON_INCLUDE_DIR}"
@@ -590,7 +603,7 @@ endif()
 
 target_include_directories(proxysql PRIVATE ${proxysql_INCLUDES})
 
-add_dependencies(proxysql openssl_ext libev_ext cityhash_ext libmicrohttpd_ext libhttpserver_ext libdaemon_ext libconfig_ext curl_ext pcre_ext libre2_ext lz4_ext mariadb-client-library_ext sqlite3_ext)
+add_dependencies(proxysql openssl_ext libev_ext cityhash_ext json_ext libmicrohttpd_ext libhttpserver_ext libdaemon_ext libconfig_ext curl_ext pcre_ext libre2_ext lz4_ext mariadb-client-library_ext sqlite3_ext)
 target_compile_features(proxysql PRIVATE cxx_std_11)
 
 target_link_libraries(proxysql PUBLIC "-Wl,--no-whole-archive"
@@ -599,7 +612,7 @@ target_link_libraries(proxysql PUBLIC "-Wl,--no-whole-archive"
 			mariadbclient httpserver microhttpd
 			libconfig libconfig++ libinjection
 			curl libev lz4
-			nlohmann_json::nlohmann_json libre2 sqlite3
+			libre2 sqlite3
 			cityhash ssl crypto
 			 "-Wl,--end-group"
 			${Backtrace_LIBRARIES} GnuTLS::GnuTLS dl pthread)
