@@ -1,10 +1,10 @@
 cmake_minimum_required(VERSION 3.10)
 
 # set the project name
-project(proxysql VERSION 2.0.11)
-
-# You can change this using --type Debug
-set(CMAKE_BUILD_TYPE Release)
+project(proxysql
+        VERSION 2.0.11
+        DESCRIPTION "High-performance MySQL proxy with a GPL license"
+        HOMEPAGE_URL "https://www.proxysql.com")
 
 # Call it using:
 # cmake -H. -B _builds
@@ -12,7 +12,7 @@ set(CMAKE_BUILD_TYPE Release)
 #
 # More complete example (FreeBSD):
 #  cmake -H. -B_builds -DCMAKE_INSTALL_RPATH_USE_LINK_PATH=YES -DCMAKE_VERBOSE_MAKEFILE:BOOL=ON \
-#   -DWITH_CLICKHOUSE=OFF -DCMAKE_C_COMPILER="/usr/local/bin/gcc" -DCMAKE_CXX_COMPILER="/usr/local/bin/g++"
+#   -DWITH_CLICKHOUSE=OFF -DCMAKE_C_COMPILER=gcc -DCMAKE_CXX_COMPILER=g++
 
 include(ExternalProject)
 include(FeatureSummary)
@@ -40,48 +40,71 @@ SET(CPACK_PACKAGE_FILE_NAME "proxysql-${CPACK_PACKAGE_VERSION}-${system_name}-${
 SET(CPACK_PACKAGE_HOMEPAGE_URL https://www.proxysql.com)
 SET(CPACK_DEBIAN_PACKAGE_MAINTAINER "support@proxysql.com")
 SET(CPACK_SOURCE_GENERATOR "DEB RPM")
+set(CPACK_RPM_PACKAGE_REQUIRES "python >= 2.5.0, cmake >= 2.8")
+set(CPACK_RPM_PACKAGE_REQUIRES_PRE "shadow-utils")
+set(CPACK_RPM_PACKAGE_REQUIRES_POST "shadow-utils, initscripts, systemd")
+set(CPACK_RPM_PACKAGE_REQUIRES_POSTUN "systemd")
+set(CPACK_RPM_PACKAGE_REQUIRES_PREUN "systemd")
+set(CPACK_RPM_PRE_INSTALL_SCRIPT_FILE "${CMAKE_CURRENT_SOURCE_DIR}/cmake/rpm-preinstall.sh")
+
 include(GNUInstallDirs)
 
+set (CMAKE_INSTALL_PREFIX /usr CACHE PATH "" FORCE)
+set (CMAKE_INSTALL_SYSCONFDIR /etc CACHE PATH "" FORCE)
+set (CMAKE_INSTALL_DATAROOTDIR /usr/share/${CMAKE_PROJECT_NAME} CACHE PATH "" FORCE)
+
 install(PROGRAMS    ${CMAKE_CURRENT_BINARY_DIR}/proxysql
-        TYPE        BIN
+        DESTINATION  ${CMAKE_INSTALL_BINDIR}
 )
 
 install(FILES       ${CMAKE_CURRENT_SOURCE_DIR}/src/proxysql.cfg
-        TYPE        SYSCONF
+        DESTINATION ${CMAKE_INSTALL_SYSCONFDIR}
 )
+
+# Create empty /var/lib/proxysql
+install(DIRECTORY   "lib/proxysql"
+        DESTINATION CMAKE_INSTALL_DATADIR)
+
 
 include(CPack)
 
 # specify the C++ standard
 set(CMAKE_CXX_STANDARD 11)
 set(CMAKE_CXX_STANDARD_REQUIRED True)
-set(CMAKE_POSITION_INDEPENDENT_CODE TRUE)
+set(CMAKE_POSITION_INDEPENDENT_CODE True)
 
-if (CMAKE_BUILD_TYPE STREQUAL "DEBUG")
-	set(CMAKE_C_FLAGS "-O0 -ggdb")
-	set(CMAKE_C_FLAGS_DEBUG "-O0 -ggdb")
-	set(CMAKE_C_FLAGS_RELEASE "-O0 -ggdb")
-	set(CMAKE_CXX_FLAGS "-O0 -ggdb")
-	set(CMAKE_CXX_FLAGS_DEBUG "-O0 -ggdb")
+set(CMAKE_C_FLAGS_RELEASE "-O2")
+set(CMAKE_CXX_FLAGS_RELEASE "-O2")
+set(CMAKE_C_FLAGS_DEBUG "-O0 -ggdb")
+set(CMAKE_CXX_FLAGS_DEBUG "-O0 -ggdb")
+
+if (CMAKE_BUILD_TYPE STREQUAL "Release")
+  set(CMAKE_C_FLAGS ${CMAKE_C_FLAGS_RELEASE})
+  set(CMAKE_CXX_FLAGS ${CMAKE_CXX_FLAGS_RELEASE})
 endif()
+
+if (CMAKE_BUILD_TYPE STREQUAL "Debug")
+  set(CMAKE_C_FLAGS ${CMAKE_C_FLAGS_DEBUG})
+  set(CMAKE_CXX_FLAGS ${CMAKE_CXX_FLAGS_DEBUG})
+endif()
+
 
 if (CMAKE_SYSTEM_NAME STREQUAL "FreeBSD")
   # cmake -H. -B_builds -DCMAKE_INSTALL_RPATH_USE_LINK_PATH=YES -DCMAKE_VERBOSE_MAKEFILE:BOOL=ON
-  # -DWITH_CLICKHOUSE=OFF -DCMAKE_C_COMPILER="/usr/local/bin/gcc" -DCMAKE_CXX_COMPILER="/usr/local/bin/g++"
+  # -DWITH_CLICKHOUSE=OFF -DCMAKE_C_COMPILER=gcc -DCMAKE_CXX_COMPILER=g++"
+    set(CMAKE_INSTALL_PREFIX "/usr/local")
 
     if (CMAKE_CXX_COMPILER_ID STREQUAL "Clang")
-      message("FreeBSD:c++ Clang ${CMAKE_CXX_COMPILER_VERSION}")
-      add_compile_options (-stdlib=libc++)
+      message(FATAL_ERROR "${CMAKE_PROJECT_NAME} needs GCC for compiling. Please install it and use -DCMAKE_CXX_COMPILER=g++")
     elseif (CMAKE_CXX_COMPILER_ID STREQUAL "GNU")
-        message("FreeBSD:g++ ${CMAKE_CXX_COMPILER_VERSION}")
-        # if multiple g++ versions are installed, pick the right libraries
-        # XXX this is brittle: update for g++7, g++8, ...
-        if (CMAKE_CXX_COMPILER_VERSION VERSION_GREATER "8.0.0")
-            message("Supported GCC detected")
-	    #set (CMAKE_EXE_LINKER_FLAGS "-lstdc++ -lc++ -lm -lc -lgcc_s -lgcc")
-	    set (CMAKE_EXE_LINKER_FLAGS "-lstdc++ -lc++ -lc")
-            set (CMAKE_EXE_LINKER_FLAGS "-Wl,-rpath=/usr/local/lib/gcc9 ${CMAKE_EXE_LINKER_FLAGS}")
-        endif()
+      message("FreeBSD:g++ ${CMAKE_CXX_COMPILER_VERSION}")
+      # if multiple g++ versions are installed, pick the right libraries
+      # XXX this is brittle: update for g++7, g++8, ...
+      if (CMAKE_CXX_COMPILER_VERSION VERSION_GREATER "8.0.0")
+        message("Supported GCC detected")
+        set (CMAKE_EXE_LINKER_FLAGS "-lstdc++ -lgcc")
+        set (CMAKE_EXE_LINKER_FLAGS "-Wl,-rpath=/usr/local/lib/gcc9 ${CMAKE_EXE_LINKER_FLAGS}")
+      endif()
     else()
         message("FreeBSD:unknown")
     endif()
@@ -89,7 +112,7 @@ endif()
 
 SET(PATCHES_DIR ${CMAKE_CURRENT_SOURCE_DIR}/patches)
 
-find_program(MAKE_EXE NAMES gmake nmake make)
+find_program(MAKE_EXE NAMES gmake make nmake)
 
 # For the GIT_STATUS -D
 find_package (Git)
@@ -123,18 +146,25 @@ else()
   message(WARNING "No Backtrace library found.")
 endif()
 
-add_compile_definitions(GITVERSION="$(repo_git_version)")
+add_compile_definitions(GITVERSION=$(repo_git_version))
 
 if (WITH_JEMALLOC)
   add_compile_definitions(JEMALLOC)
 endif()
 
+
+# ifeq ($(wildcard /usr/lib/systemd/system), /usr/lib/systemd/system)
+# 	SYSTEMD=1
+# else
+# 	SYSTEMD=0
+# endif
+
 # Require GNU TLS for building the libmicrohttpd library
 find_package(GnuTLS REQUIRED)
 if(GNUTLS_FOUND)
-    message(STATUS "Library 'GnuTLS' found at ${GNUTLS_LIBRARIES}")
+  message(STATUS "Library 'GnuTLS' found at ${GNUTLS_LIBRARIES}")
 else()
-    message(FATAL_ERROR "Library 'GnuTLS' not found! Install it vie e.g. 'brew install gnutls' or 'dnf install gnutls-devel'")
+  message(FATAL_ERROR "Library 'GnuTLS' not found! Install it vie e.g. 'brew install gnutls' or 'dnf install gnutls-devel'")
 endif()
 
 # Libinjection uses python for generating stuff
@@ -168,11 +198,12 @@ add_subdirectory("${PROJECT_SOURCE_DIR}/external/nlohmann_json")
 ### See https://hunter.readthedocs.io/en/latest/overview.html
 ###
 
+#find_package(Foo [major[.minor[.patch[.tweak]]]] [EXACT] [QUIET] [REQUIRED]
 ExternalProject_Add(libconfig_ext
 	PREFIX						deps
   URL               https://hyperrealm.github.io/libconfig/dist/libconfig-1.7.2.tar.gz
   URL_HASH          SHA1=1da1e7f4e0e376582a8414d2be1acc9dbf6649b5
-  CONFIGURE_COMMAND CFLAGS=${CMAKE_C_FLAGS} CXXFLAGS=${CMAKE_CXX_FLAGS} CC=${CMAKE_C_COMPILER} CXX=${CMAKE_CXX_COMPILER} ./configure
+  CONFIGURE_COMMAND ./configure "CFLAGS=${CMAKE_C_FLAGS}" "CXXFLAGS=${CMAKE_CXX_FLAGS}" "CC=${CMAKE_C_COMPILER}" "CXX=${CMAKE_CXX_COMPILER}"
   BUILD_IN_SOURCE 1
   BUILD_COMMAND     ${MAKE_EXE}
   UPDATE_COMMAND ""
@@ -190,7 +221,7 @@ ExternalProject_Add(libdaemon_ext
 	PREFIX						deps
   URL               http://0pointer.de/lennart/projects/libdaemon/libdaemon-0.14.tar.gz
   URL_HASH          SHA1=78a4db58cf3a7a8906c35592434e37680ca83b8f
-  CONFIGURE_COMMAND CFLAGS=${CMAKE_C_FLAGS} CXXFLAGS=${CMAKE_CXX_FLAGS} CC=${CMAKE_C_COMPILER} CXX=${CMAKE_CXX_COMPILER} ./configure --disable-examples
+  CONFIGURE_COMMAND  ./configure --disable-examples "CFLAGS=${CMAKE_C_FLAGS}" "CXXFLAGS=${CMAKE_CXX_FLAGS}" CC=${CMAKE_C_COMPILER} CXX=${CMAKE_CXX_COMPILER}
   BUILD_IN_SOURCE 1
   BUILD_COMMAND     ${MAKE_EXE}
   UPDATE_COMMAND ""
@@ -208,7 +239,7 @@ if (WITH_JEMALLOC)
     PREFIX						deps
     URL               https://github.com/jemalloc/jemalloc/releases/download/5.2.1/jemalloc-5.2.1.tar.bz2
     URL_HASH          SHA1=9e06b5cc57fd185379d007696da153893cf73e30
-    CONFIGURE_COMMAND CFLAGS=${CMAKE_C_FLAGS} CXXFLAGS=${CMAKE_CXX_FLAGS} CC=${CMAKE_C_COMPILER} CXX=${CMAKE_CXX_COMPILER} ./configure
+    CONFIGURE_COMMAND  ./configure "CFLAGS=${CMAKE_C_FLAGS}" "CXXFLAGS=${CMAKE_CXX_FLAGS}" CC=${CMAKE_C_COMPILER} CXX=${CMAKE_CXX_COMPILER}
     BUILD_IN_SOURCE 1
     BUILD_COMMAND     ${MAKE_EXE}
     UPDATE_COMMAND ""
@@ -226,7 +257,7 @@ ExternalProject_Add(cityhash_ext
 	PREFIX						deps
   URL               https://github.com/google/cityhash/archive/master.zip
   URL_HASH          SHA1=6c527dfc36ba12157113163e7666a3d501a77077
-  CONFIGURE_COMMAND CFLAGS=${CMAKE_C_FLAGS} CXXFLAGS=${CMAKE_CXX_FLAGS} CC=${CMAKE_C_COMPILER} CXX=${CMAKE_CXX_COMPILER} ./configure
+  CONFIGURE_COMMAND ./configure "CFLAGS=${CMAKE_C_FLAGS}" "CXXFLAGS=${CMAKE_CXX_FLAGS}" "CC=${CMAKE_C_COMPILER}" "CXX=${CMAKE_CXX_COMPILER}"
   BUILD_IN_SOURCE 1
   BUILD_COMMAND     ${MAKE_EXE}
   UPDATE_COMMAND ""
@@ -259,7 +290,7 @@ ExternalProject_Add(openssl_ext
 	PREFIX						deps
   URL               https://github.com/openssl/openssl/archive/OpenSSL_1_1_1d.tar.gz
   URL_HASH          SHA1=df0ee4811c87c209ebadb4e6b203d1e560d00f9a
-  CONFIGURE_COMMAND CFLAGS=${CMAKE_C_FLAGS} CXXFLAGS=${CMAKE_CXX_FLAGS} CC=${CMAKE_C_COMPILER} CXX=${CMAKE_CXX_COMPILER} ./config no-shared threads enable-egd
+  CONFIGURE_COMMAND ./config no-shared threads enable-egd "CFLAGS=${CMAKE_C_FLAGS}" "CXXFLAGS=${CMAKE_CXX_FLAGS}" "CC=${CMAKE_C_COMPILER}" "CXX=${CMAKE_CXX_COMPILER}"
   BUILD_IN_SOURCE 1
   BUILD_COMMAND     ${MAKE_EXE}
   UPDATE_COMMAND    ""
@@ -279,11 +310,11 @@ ExternalProject_Add(curl_ext
 	PREFIX						deps
   URL               https://github.com/curl/curl/releases/download/curl-7_69_1/curl-7.69.1.tar.bz2
   URL_HASH          SHA1=f330c29aef026faff98bc0d712cbbe3c00d5c06e
-  CONFIGURE_COMMAND CFLAGS=${CMAKE_C_FLAGS} CXXFLAGS=${CMAKE_CXX_FLAGS} CC=${CMAKE_C_COMPILER} CXX=${CMAKE_CXX_COMPILER} LDFLAGS=-L${OPENSSL_LIB_DIR} ./configure --disable-debug --disable-ftp --disable-ldap
+  CONFIGURE_COMMAND  ./configure --disable-debug --disable-ftp --disable-ldap  --without-depssh2 --without-brotli --disable-shared --with-ssl=${OPENSSL_DIR}
                       --disable-ldaps --disable-rtsp --disable-dict --disable-telnet --disable-tftp --disable-pop3 --disable-imap
                       --disable-smb --disable-smtp --disable-gopher --disable-manual --disable-ipv6 --disable-sspi
                       --disable-crypto-auth --disable-ntlm-wb --disable-tls-srp --without-nghttp2 --without-libidn2
-                      --without-depssh2 --without-brotli --disable-shared --with-ssl=${OPENSSL_DIR}
+                    "CFLAGS=${CMAKE_C_FLAGS}" "CXXFLAGS=${CMAKE_CXX_FLAGS}" "CC=${CMAKE_C_COMPILER}" "CXX=${CMAKE_CXX_COMPILER}" "LDFLAGS=-L${OPENSSL_LIB_DIR}"
   BUILD_IN_SOURCE 1
   BUILD_COMMAND     ${MAKE_EXE}
   UPDATE_COMMAND    ""
@@ -301,7 +332,7 @@ ExternalProject_Add(libev_ext
 	PREFIX						deps
   URL               http://dist.schmorp.de/libev/Attic/libev-4.24.tar.gz
   URL_HASH          SHA1=436dd8eff00a45f8805b8cacfe4dd3bd993caedb
-  CONFIGURE_COMMAND CFLAGS=${CMAKE_C_FLAGS} CXXFLAGS=${CMAKE_CXX_FLAGS} CC=${CMAKE_C_COMPILER} CXX=${CMAKE_CXX_COMPILER} ./configure
+  CONFIGURE_COMMAND ./configure "CFLAGS=${CMAKE_C_FLAGS}" "CXXFLAGS=${CMAKE_CXX_FLAGS}" "CC=${CMAKE_C_COMPILER}" "CXX=${CMAKE_CXX_COMPILER}"
   BUILD_IN_SOURCE 1
   BUILD_COMMAND     ${MAKE_EXE}
   UPDATE_COMMAND    ""
@@ -334,7 +365,7 @@ ExternalProject_Add(libmicrohttpd_ext
 	PREFIX						deps
   URL               https://ftp.gnu.org/gnu/libmicrohttpd/libmicrohttpd-0.9.68.tar.gz
   URL_HASH          SHA1=ed1a586727673de25c27ff294700620a39671024
-  CONFIGURE_COMMAND CFLAGS=${CMAKE_C_FLAGS} CXXFLAGS=${CMAKE_CXX_FLAGS} CC=${CMAKE_C_COMPILER} CXX=${CMAKE_CXX_COMPILER} ./configure --enable-https
+  CONFIGURE_COMMAND ./configure --enable-https "CFLAGS=${CMAKE_C_FLAGS}" "CXXFLAGS=${CMAKE_CXX_FLAGS}" "CC=${CMAKE_C_COMPILER}" "CXX=${CMAKE_CXX_COMPILER}"
   BUILD_IN_SOURCE 1
   BUILD_COMMAND     ${MAKE_EXE}
   UPDATE_COMMAND    ""
@@ -367,12 +398,11 @@ ExternalProject_Add(libhttpserver_ext
 	PREFIX						deps
   URL        				https://github.com/etr/libhttpserver/archive/master.zip
   URL_HASH          SHA1=c5564db0623e1f202b3c496a451b9fb474af4109
-  CONFIGURE_COMMAND rm -rf build && MAKE=${MAKE_EXE} autoreconf -i && mkdir build && cd build && CFLAGS=${CMAKE_C_FLAGS}
-                      CXXFLAGS=${CMAKE_CXX_FLAGS} CC=${CMAKE_C_COMPILER} CXX=${CMAKE_CXX_COMPILER}
-                      MAKE=${MAKE_EXE} CPPFLAGS=-I${LIBMICROHTTPD_INCLUDE_DIR} LIBS=-lmicrohttpd LDFLAGS=-L${LIBMICROHTTPD_LIB_DIR}
-                      LD_LIBRARY_PATH=${LIBMICROHTTPD_LIB_DIR} ../configure --enable-static --disable-shared
+  CONFIGURE_COMMAND rm -rf build && MAKE=${MAKE_EXE} autoreconf -i && mkdir build && cd build && ../configure --enable-static --disable-shared
                         --disable-doxygen-doc --disable-doxygen-dot --disable-doxygen-man --disable-doxygen-html
-                        --disable-examples
+                        --disable-examples "CFLAGS=${CMAKE_C_FLAGS}" "LD_LIBRARY_PATH=${LIBMICROHTTPD_LIB_DIR}"
+			                "CXXFLAGS=${CMAKE_CXX_FLAGS}" "CC=${CMAKE_C_COMPILER}" "CXX=${CMAKE_CXX_COMPILER}"
+                      "MAKE=${MAKE_EXE}" "CPPFLAGS=-I${LIBMICROHTTPD_INCLUDE_DIR}" "LIBS=-lmicrohttpd" "LDFLAGS=-L${LIBMICROHTTPD_LIB_DIR}"
   BUILD_IN_SOURCE 1
   BUILD_COMMAND     ${MAKE_EXE} -C build
   UPDATE_COMMAND    ""
@@ -430,7 +460,7 @@ ExternalProject_Add(pcre_ext
 	PREFIX						deps
   URL               https://ftp.pcre.org/pub/pcre/pcre-8.39.tar.gz
   URL_HASH          SHA1=b3aec1f643d9701841e2f9d57ac121a7ff448fc8
-  CONFIGURE_COMMAND CFLAGS=${CMAKE_C_FLAGS} CXXFLAGS=${CMAKE_CXX_FLAGS} CC=${CMAKE_C_COMPILER} CXX=${CMAKE_CXX_COMPILER} ./configure
+  CONFIGURE_COMMAND  ./configure "CFLAGS=${CMAKE_C_FLAGS}" "CXXFLAGS=${CMAKE_CXX_FLAGS}" "CC=${CMAKE_C_COMPILER}" "CXX=${CMAKE_CXX_COMPILER}"
   BUILD_IN_SOURCE 1
   BUILD_COMMAND     ${MAKE_EXE}
   UPDATE_COMMAND    ""
@@ -470,7 +500,7 @@ ExternalProject_Add(sqlite3_ext
   URL_HASH          SHA1=ed35829ac78019528556809f41112b28a5d31e70
   CONFIGURE_COMMAND ""
   BUILD_IN_SOURCE 1
-  BUILD_COMMAND     ${CMAKE_C_COMPILER} ${CMAKE_CFLAGS} -O2 -c -o sqlite3.o sqlite3.c -DSQLITE_ENABLE_MEMORY_MANAGEMENT -DSQLITE_ENABLE_JSON1
+  BUILD_COMMAND     ${CMAKE_C_COMPILER} -O0 -ggdb -c -o sqlite3.o sqlite3.c -DSQLITE_ENABLE_MEMORY_MANAGEMENT -DSQLITE_ENABLE_JSON1
   UPDATE_COMMAND    ""
   INSTALL_COMMAND   ""
   PATCH_COMMAND			patch -p0 < ${CMAKE_CURRENT_SOURCE_DIR}/patches/sqlite3-from_unixtime.patch
