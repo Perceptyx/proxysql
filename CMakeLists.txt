@@ -124,7 +124,7 @@ if (GIT_FOUND)
       ERROR_QUIET
       OUTPUT_STRIP_TRAILING_WHITESPACE)
 
-  message(STATUS "Using GIT_VERSION=${repo_git_version}")
+  message(STATUS "Using GITVERSION=${repo_git_version}")
 else()
   message(WARNING "No GIT_VERSION will be added to resulting binary.")
   set(repo_git_version "undefined")
@@ -146,7 +146,7 @@ else()
   message(WARNING "No Backtrace library found.")
 endif()
 
-add_compile_definitions(GITVERSION=$(repo_git_version))
+add_compile_definitions(GITVERSION="${repo_git_version}")
 
 if (WITH_JEMALLOC)
   add_compile_definitions(JEMALLOC)
