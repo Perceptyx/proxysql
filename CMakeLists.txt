@@ -171,11 +171,15 @@ endif()
 # code is written in py2 syntax
 find_package (Python REQUIRED COMPONENTS Interpreter)
 
-SET (LIBINJECTION_PATCH_COMMAND "")
+set(LIBINJECTION_PATCH_COMMAND "")
 
 if (Python_VERSION_MAJOR EQUAL "3")
   message(STATUS "Will patch libinjection for python3 support")
-  SET (LIBINJECTION_PATCH_COMMAND 2to3 -w src/fingerprints2sqli.py src/make_parens.py src/sqlparse2c.py src/sqlparse_map.py)
+  set(LIBINJECTION_PATCH_COMMAND 2to3 -w src/fingerprints2sqli.py src/make_parens.py src/sqlparse2c.py src/sqlparse_map.py)
+  set(LIBINJECTION_PATCH_SHEBANG sed -i.bak -e "s:python:python3:g" src/make_parens.py src/sqlparse2c.py src/sqlparse_map.py)
+else()
+  set(LIBINJECTION_PATCH_COMMAND "echo applying https://patch-diff.githubusercontent.com/raw/client9/libinjection/pull/144.patch")
+  set(LIBINJECTION_PATCH_SHEBANG sed -i.bak -e "s:python:python2:g" src/make_parens.py src/sqlparse2c.py src/sqlparse_map.py)
 endif()
 
 # Typically you don't care so much for a third party library's tests to be
@@ -285,10 +289,11 @@ ExternalProject_Add(libinjection_ext
   URL_HASH          SHA1=74a2b44f8fe946f82df7f471258190230cd6d3a4
   CONFIGURE_COMMAND ""
   BUILD_IN_SOURCE 1
-  BUILD_COMMAND     env python=${Python2} ${MAKE_EXE} -C src all
+  BUILD_COMMAND     ${MAKE_EXE} -C src all
   UPDATE_COMMAND    ""
   INSTALL_COMMAND   ""
   PATCH_COMMAND     ${LIBINJECTION_PATCH_COMMAND}
+  COMMAND           ${LIBINJECTION_PATCH_SHEBANG}
 )
 
 SET(LIBINJECTION_LIB_DIR ${CMAKE_CURRENT_BINARY_DIR}/deps/src/libinjection_ext/src)
@@ -433,7 +438,7 @@ ExternalProject_Add(lz4_ext
   URL_HASH          SHA1=a710a7d45beb0951806d2b98f0c1739107e97c14
   CONFIGURE_COMMAND ""
   BUILD_IN_SOURCE 1
-  BUILD_COMMAND     ${MAKE_EXE}
+  BUILD_COMMAND     "gmake"
   UPDATE_COMMAND    ""
   INSTALL_COMMAND   ""
   PATCH_COMMAND			""
